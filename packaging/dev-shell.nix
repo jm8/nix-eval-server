@@ -89,6 +89,7 @@ in {
     ++ pkgs.nixComponents.nix-store.nativeBuildInputs
     ++ pkgs.nixComponents.nix-fetchers.nativeBuildInputs
     ++ pkgs.nixComponents.nix-expr.nativeBuildInputs
+    ++ pkgs.nixComponents.nix-eval-server.nativeBuildInputs
     ++ lib.optionals havePerl pkgs.nixComponents.nix-perl-bindings.nativeBuildInputs
     ++ lib.optionals buildCanExecuteHost pkgs.nixComponents.nix-manual.externalNativeBuildInputs
     ++ pkgs.nixComponents.nix-internal-api-docs.nativeBuildInputs
@@ -122,6 +123,7 @@ in {
     ++ pkgs.nixComponents.nix-expr.buildInputs
     ++ pkgs.nixComponents.nix-expr.externalPropagatedBuildInputs
     ++ pkgs.nixComponents.nix-cmd.buildInputs
+    ++ pkgs.nixComponents.nix-eval-server.buildInputs
     ++ lib.optionals havePerl pkgs.nixComponents.nix-perl-bindings.externalBuildInputs
     ++ lib.optional havePerl pkgs.perl
     ;

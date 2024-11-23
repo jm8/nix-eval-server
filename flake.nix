@@ -256,6 +256,8 @@
 
             "nix-cli" = { };
 
+            "nix-eval-server" = { };
+
             "nix-everything" = { };
 
             "nix-functional-tests" = { supportsCross = false; };
