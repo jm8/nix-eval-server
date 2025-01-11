@@ -61,6 +61,12 @@ mkMesonExecutable (finalAttrs: {
       echo ${version} > ../../../.version
     '';
 
+  postInstall = 
+    ''
+      mkdir -p $out/share
+      cp $src/src/nix-eval-server/nix-eval-server.capnp $out/share
+    '';
+
   mesonFlags = [
   ];
 

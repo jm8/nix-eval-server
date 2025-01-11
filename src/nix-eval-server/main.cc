@@ -7,25 +7,79 @@
 #include <kj/async.h>
 #include <kj/async.h>
 #include <kj/memory.h>
-#include <nix-eval-server.capnp.h>
+#include <nlohmann/json.hpp>
 
-class EvaluatorImpl : public Evaluator::Server
-{
-public:
-    kj::Promise<void> test(TestContext context)
-    {
-        context.getResults().setY(context.getParams().getX() * 2.0);
-        return kj::READY_NOW;
-    }
+// for SYSTEM
+#include "config-store.hh" // IWYU pragma: keep
+
+#include "eval-gc.hh"
+#include "eval.hh"
+#include "fetch-settings.hh"
+#include "pos-idx.hh"
+#include "shared.hh"
+#include "source-path.hh"
+#include "store-api.hh"
+#include <memory>
+#include <nix-eval-server.capnp.h>
+#include <nlohmann/json_fwd.hpp>
+#include <string>
+
+std::unique_ptr<nix::EvalState> state;
+
+nix::fetchers::Settings fetchSettings;
+
+nix::EvalSettings evalSettings{
+    nix::settings.readOnlyMode,
+    {},
 };
+
+std::vector<std::string> get_attributes(const std::string & expression)
+{
+    nix::Value v;
+    try {
+        auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+        state->eval(expr, v);
+        state->forceAttrs(v, nix::noPos, "");
+    } catch (nix::Error & e) {
+        std::cerr << "CAUGHT ERROR: " << e.what() << "\n";
+    }
+    std::vector<std::string> result;
+    for (auto attr : *v.attrs()) {
+        result.push_back(state->symbols[attr.name].c_str());
+    }
+    return result;
+}
+
+nlohmann::json ok(const nlohmann::json & json)
+{
+    return {{"ok", json}};
+}
+
+nlohmann::json error(const std::string & s)
+{
+    return {{"ok", s}};
+}
+
+nlohmann::json handle(const nlohmann::json & request)
+{
+    if (request["method"] == "get_attributes") {
+        return ok(get_attributes(request["expression"]));
+    }
+    return error("unexpected method");
+}
 
 int main(int argc, char ** argv)
 {
-    capnp::EzRpcServer server(kj::heap<EvaluatorImpl>(), "127.0.0.1", 0);
+    nix::initGC();
+    nix::initNix();
 
-    auto & waitScope = server.getWaitScope();
-    std::cout << server.getPort().wait(waitScope) << std::endl;
+    state = std::make_unique<nix::EvalState>(nix::LookupPath::parse({}), nix::openStore(), fetchSettings, evalSettings);
 
-    // Run forever, accepting connections and handling requests.
-    kj::NEVER_DONE.wait(waitScope);
+    while (true) {
+        std::string line;
+        std::getline(std::cin, line);
+        auto request = nlohmann::json::parse(line);
+        auto response = handle(request);
+        std::cout << response << std::endl;
+    }
 }

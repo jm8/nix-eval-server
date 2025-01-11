@@ -2,5 +2,6 @@
 
 interface Evaluator {
   test @0 (x: UInt32) -> (y: UInt32);
+  getAttributes @1 (expression: Text) -> (attributes: List(Text));
 }
 
