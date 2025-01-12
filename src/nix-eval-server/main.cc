@@ -9,9 +9,6 @@
 #include <kj/memory.h>
 #include <nlohmann/json.hpp>
 
-// for SYSTEM
-#include "config-store.hh" // IWYU pragma: keep
-
 #include "eval-gc.hh"
 #include "eval.hh"
 #include "fetch-settings.hh"
@@ -42,11 +39,13 @@ std::vector<std::string> get_attributes(const std::string & expression)
         state->forceAttrs(v, nix::noPos, "");
     } catch (nix::Error & e) {
         std::cerr << "CAUGHT ERROR: " << e.what() << "\n";
+        return {};
     }
     std::vector<std::string> result;
     for (auto attr : *v.attrs()) {
         result.push_back(state->symbols[attr.name].c_str());
     }
+    std::sort(result.begin(), result.end());
     return result;
 }
 
@@ -77,7 +76,9 @@ int main(int argc, char ** argv)
 
     while (true) {
         std::string line;
-        std::getline(std::cin, line);
+        if (!std::getline(std::cin, line)) {
+            break;
+        }
         auto request = nlohmann::json::parse(line);
         auto response = handle(request);
         std::cout << response << std::endl;

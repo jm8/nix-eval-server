@@ -13,6 +13,14 @@ project(
   license: 'LGPL-2.1-or-later',
 )
 
+add_project_arguments(
+  '-include', 'config-util.hh',
+  '-include', 'config-store.hh',
+  '-include', 'config-expr.hh',
+  '-include', 'config-main.hh',
+  language : 'cpp',
+)
+
 cxx = meson.get_compiler('cpp')
 
 deps = [
