@@ -203,6 +203,15 @@ struct LockFlags
     std::set<InputPath> inputUpdates;
 };
 
+// nix-analyzer: give more parameters
+LockedFlake lockFlake(
+    const Settings & settings,
+    EvalState & state,
+    const FlakeRef & topRef,
+    const LockFlags & lockFlags,
+    Flake & flake,
+    const LockFile & oldLockFile);
+
 LockedFlake lockFlake(
     const Settings & settings,
     EvalState & state,
@@ -224,7 +233,18 @@ std::pair<StorePath, Path> sourcePathToStorePath(
     ref<Store> store,
     const SourcePath & path);
 
+// nix-analyzer: make not private
+std::map<FlakeId, FlakeInput> parseFlakeInputs(
+    EvalState & state, Value * value, const PosIdx pos,
+    const std::optional<Path> & baseDir, InputPath lockRootPath);
+
+// nix-analyzer: make not private
+FlakeInput parseFlakeInput(EvalState & state,
+    std::string_view inputName, Value * value, const PosIdx pos,
+    const std::optional<Path> & baseDir, InputPath lockRootPath);
+    
 }
+
 
 void emitTreeAttrs(
     EvalState & state,
@@ -240,5 +260,7 @@ void emitTreeAttrs(
  * added/removed/changed).
  */
 void prim_fetchFinalTree(EvalState & state, const PosIdx pos, Value * * args, Value & v);
+
+
 
 }

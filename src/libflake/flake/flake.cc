@@ -94,11 +94,13 @@ static void expectType(EvalState & state, ValueType type,
             showType(type), showType(value.type()), state.positions[pos]);
 }
 
-static std::map<FlakeId, FlakeInput> parseFlakeInputs(
+// nix-analyzer: make not private
+std::map<FlakeId, FlakeInput> parseFlakeInputs(
     EvalState & state, Value * value, const PosIdx pos,
     const std::optional<Path> & baseDir, InputPath lockRootPath);
 
-static FlakeInput parseFlakeInput(EvalState & state,
+// nix-analyzer: make not private
+FlakeInput parseFlakeInput(EvalState & state,
     std::string_view inputName, Value * value, const PosIdx pos,
     const std::optional<Path> & baseDir, InputPath lockRootPath)
 {
@@ -191,7 +193,8 @@ static FlakeInput parseFlakeInput(EvalState & state,
     return input;
 }
 
-static std::map<FlakeId, FlakeInput> parseFlakeInputs(
+// nix-analyzer: make not private
+std::map<FlakeId, FlakeInput> parseFlakeInputs(
     EvalState & state, Value * value, const PosIdx pos,
     const std::optional<Path> & baseDir, InputPath lockRootPath)
 {
@@ -346,13 +349,14 @@ static LockFile readLockFile(
         : LockFile();
 }
 
-/* Compute an in-memory lock file for the specified top-level flake,
-   and optionally write it to file, if the flake is writable. */
+// nix-analyzer: give more parameters
 LockedFlake lockFlake(
     const Settings & settings,
     EvalState & state,
     const FlakeRef & topRef,
-    const LockFlags & lockFlags)
+    const LockFlags & lockFlags,
+    Flake & flake,
+    const LockFile & oldLockFile)
 {
     experimentalFeatureSettings.require(Xp::Flakes);
 
@@ -360,23 +364,16 @@ LockedFlake lockFlake(
 
     auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
 
-    auto flake = getFlake(state, topRef, useRegistries, flakeCache);
-
     if (lockFlags.applyNixConfig) {
         flake.config.apply(settings);
         state.store->setOptions();
     }
 
+    if (!state.fetchSettings.allowDirty && lockFlags.referenceLockFilePath) {
+        throw Error("reference lock file was provided, but the `allow-dirty` setting is set to false");
+    }
+
     try {
-        if (!state.fetchSettings.allowDirty && lockFlags.referenceLockFilePath) {
-            throw Error("reference lock file was provided, but the `allow-dirty` setting is set to false");
-        }
-
-        auto oldLockFile = readLockFile(
-            state.fetchSettings,
-            lockFlags.referenceLockFilePath.value_or(
-                flake.lockFilePath()));
-
         debug("old lock file: %s", oldLockFile);
 
         std::map<InputPath, FlakeInput> overrides;
@@ -750,6 +747,29 @@ LockedFlake lockFlake(
         e.addTrace({}, "while updating the lock file of flake '%s'", flake.lockedRef.to_string());
         throw;
     }
+}
+    
+/* Compute an in-memory lock file for the specified top-level flake,
+   and optionally write it to file, if the flake is writable. */
+LockedFlake lockFlake(
+    const Settings & settings,
+    EvalState & state,
+    const FlakeRef & topRef,
+    const LockFlags & lockFlags)
+{
+    auto useRegistries = lockFlags.useRegistries.value_or(settings.useRegistries);
+
+    FlakeCache flakeCache;
+
+    auto flake = getFlake(state, topRef, useRegistries, flakeCache);
+
+    auto oldLockFile = readLockFile(
+        state.fetchSettings,
+        lockFlags.referenceLockFilePath.value_or(
+            flake.lockFilePath()));
+
+
+    return lockFlake(settings, state, topRef, lockFlags, flake, oldLockFile);
 }
 
 std::pair<StorePath, Path> sourcePathToStorePath(
