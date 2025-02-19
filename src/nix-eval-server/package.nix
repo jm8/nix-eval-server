@@ -7,7 +7,8 @@
 , nix-main
 , nix-flake
 
-, capnp
+, protobuf
+, grpc
 
 # Configuration Options
 
@@ -28,13 +29,12 @@ mkMesonExecutable (finalAttrs: {
     ../../.version
     ./.version
     ./meson.build
-    ./capnproto_build.sh
   ] ++ lib.concatMap
     (dir: [
       (fileset.fileFilter (file: file.hasExt "cc") dir)
       (fileset.fileFilter (file: file.hasExt "hh") dir)
       (fileset.fileFilter (file: file.hasExt "md") dir)
-      (fileset.fileFilter (file: file.hasExt "capnp") dir)
+      (fileset.fileFilter (file: file.hasExt "proto") dir)
     ])
     [
       ./.
@@ -46,11 +46,13 @@ mkMesonExecutable (finalAttrs: {
     nix-expr
     nix-main
     nix-flake
-    capnp
+    protobuf
+    grpc
   ];
 
   nativeBuildInputs = [
-    capnp
+    protobuf
+    grpc
   ];
 
   preConfigure =
@@ -64,7 +66,7 @@ mkMesonExecutable (finalAttrs: {
   postInstall = 
     ''
       mkdir -p $out/share
-      cp $src/src/nix-eval-server/nix-eval-server.capnp $out/share
+      cp $src/src/nix-eval-server/nix-eval-server.proto $out/share
     '';
 
   mesonFlags = [

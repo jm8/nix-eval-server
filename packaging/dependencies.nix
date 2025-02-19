@@ -169,7 +169,8 @@ scope: {
       ];
   });
 
-  capnp = pkgs.capnproto;
+  protobuf = pkgs.protobuf;
+  grpc = pkgs.grpc;
 
   busybox-sandbox-shell = pkgs.busybox-sandbox-shell or (pkgs.busybox.override {
     useMusl = true;

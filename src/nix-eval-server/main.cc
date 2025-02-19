@@ -1,14 +1,6 @@
 #include <cstdio>
 #include <iostream>
-#include <capnp/common.h>
-#include <capnp/message.h>
-#include <capnp/serialize.h>
-#include <capnp/ez-rpc.h>
-#include <kj/async.h>
-#include <kj/async.h>
-#include <kj/memory.h>
 #include <nlohmann/json.hpp>
-
 #include "canon-path.hh"
 #include "eval-gc.hh"
 #include "eval.hh"
@@ -22,9 +14,12 @@
 #include "store-api.hh"
 #include "value.hh"
 #include <memory>
-#include <nix-eval-server.capnp.h>
+#include <nix-eval-server.pb.h>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
+#include "nix-eval-server.grpc.pb.h"
+#include <grpc++/grpc++.h>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
 
 std::unique_ptr<nix::EvalState> state;
 
@@ -106,8 +101,6 @@ nix::flake::FlakeInputs parseFlakeInputs(nix::EvalState & state, std::string_vie
     }
     return inputs;
 }
-// return inputs;
-// }
 
 std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeExpr, std::string_view path)
 {
@@ -159,44 +152,24 @@ std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeEx
     }
 }
 
-nlohmann::json ok(const nlohmann::json & json)
-{
-    return {{"ok", json}};
-}
+// auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+// auto lock_file = lockFlake(*state, expr, "/flake.nix");
+using grpc::Server;
+using grpc::ServerBuilder;
+using grpc::ServerContext;
+using grpc::Status;
+using sample::SampleRequest;
+using sample::SampleResponse;
+using sample::SampleService;
 
-nlohmann::json error(const std::string & s)
+class SampleServiceImpl final : public SampleService::Service
 {
-    return {{"error", s}};
-}
-
-nlohmann::json lock_flake(const std::string & expression)
-{
-    try {
-        auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-        auto lock_file = lockFlake(*state, expr, "/flake.nix");
-        if (lock_file) {
-            return ok(*lock_file);
-        }
-        return error("failed to lock flake");
-    } catch (nix::Error & e) {
-        std::cerr << "CAUGHT ERROR: " << e.what() << "\n";
-        return error("failed to lock flake");
+    Status SampleMethod(ServerContext * context, const SampleRequest * request, SampleResponse * response) override
+    {
+        response->set_response_sample_field("Hello " + request->request_sample_field());
+        return Status::OK;
     }
-}
-nlohmann::json handle(const nlohmann::json & request)
-{
-    try {
-        if (request["method"] == "get_attributes") {
-            return ok(get_attributes(request["expression"]));
-        } else if (request["method"] == "lock_flake") {
-            return lock_flake(request["expression"]);
-        }
-        return error("unexpected method");
-    } catch (const std::exception & ex) {
-        std::cerr << "UNHANDLED EXCEPTION: " << ex.what() << "\n";
-        return error("unhandled exception");
-    }
-}
+};
 
 int main(int argc, char ** argv)
 {
@@ -205,13 +178,16 @@ int main(int argc, char ** argv)
 
     state = std::make_unique<nix::EvalState>(nix::LookupPath::parse({}), nix::openStore(), fetchSettings, evalSettings);
 
-    while (true) {
-        std::string line;
-        if (!std::getline(std::cin, line)) {
-            break;
-        }
-        auto request = nlohmann::json::parse(line);
-        auto response = handle(request);
-        std::cout << response << std::endl;
-    }
+    grpc::EnableDefaultHealthCheckService(true);
+    grpc::reflection::InitProtoReflectionServerBuilderPlugin();
+    SampleServiceImpl service;
+    std::string server_address{"localhost:0"};
+    ServerBuilder builder;
+    int selected_port;
+    builder.AddListeningPort(server_address, grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&service);
+    std::unique_ptr<Server> server{builder.BuildAndStart()};
+
+    std::cout << "Server listening on " << selected_port << std::endl;
+    server->Wait();
 }
