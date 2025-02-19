@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <grpcpp/support/status.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include "canon-path.hh"
@@ -8,6 +9,7 @@
 #include "flake/flake.hh"
 #include "flake/lockfile.hh"
 #include "flake/settings.hh"
+#include "grpcpp/server_context.h"
 #include "pos-idx.hh"
 #include "shared.hh"
 #include "source-path.hh"
@@ -147,27 +149,43 @@ std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeEx
 
         return lockFileStr;
     } catch (nix::Error & err) {
+        std::cerr << "CAUGHT ERROR" << err.what() << "\n";
         // REPORT_ERROR(err);
         return {};
     }
 }
 
-// auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-// auto lock_file = lockFlake(*state, expr, "/flake.nix");
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
-using sample::SampleRequest;
-using sample::SampleResponse;
-using sample::SampleService;
+using grpc::StatusCode;
+using nix_eval_server::NixEvalServer;
+using nix_eval_server::GetAttributesRequest;
+using nix_eval_server::GetAttributesResponse;
+using nix_eval_server::LockFlakeRequest;
+using nix_eval_server::LockFlakeResponse;
 
-class SampleServiceImpl final : public SampleService::Service
+class NixEvalServerImpl final : public NixEvalServer::Service
 {
-    Status SampleMethod(ServerContext * context, const SampleRequest * request, SampleResponse * response) override
-    {
-        response->set_response_sample_field("Hello " + request->request_sample_field());
+    Status GetAttributes(ServerContext *context, const GetAttributesRequest *request, GetAttributesResponse *response) override {
+        const auto expression = request->expression();
+        const auto attributes = get_attributes(expression);
+        for (const auto &attribute : attributes) {
+            response->add_attributes(attribute);
+        }
         return Status::OK;
+    }
+
+    Status LockFlake(ServerContext *context, const LockFlakeRequest *request, LockFlakeResponse *response) override {
+        const auto expression = request->expression();
+        auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+        auto lock_file = lockFlake(*state, expr, "/flake.nix");
+        if (lock_file) {
+            response->set_lock_file(*lock_file);
+            return Status::OK;
+        }
+        return {StatusCode::INTERNAL, "Failed"};
     }
 };
 
@@ -180,7 +198,7 @@ int main(int argc, char ** argv)
 
     grpc::EnableDefaultHealthCheckService(true);
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
-    SampleServiceImpl service;
+    NixEvalServerImpl service;
     std::string server_address{"localhost:0"};
     ServerBuilder builder;
     int selected_port;
@@ -188,6 +206,6 @@ int main(int argc, char ** argv)
     builder.RegisterService(&service);
     std::unique_ptr<Server> server{builder.BuildAndStart()};
 
-    std::cout << "Server listening on " << selected_port << std::endl;
+    std::cout << selected_port << std::endl;
     server->Wait();
 }

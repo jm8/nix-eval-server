@@ -1,15 +1,26 @@
 syntax = "proto3";
 
-package sample;
+package nix_eval_server;
 
-service SampleService {
-    rpc SampleMethod (SampleRequest) returns (SampleResponse) {}
+service NixEvalServer {
+    rpc GetAttributes (GetAttributesRequest) returns (GetAttributesResponse) {}
+    rpc LockFlake (LockFlakeRequest) returns (LockFlakeResponse) {}
 }
 
-message SampleRequest {
-    string request_sample_field = 1;
+message GetAttributesRequest {
+    string expression = 1;
 }
 
-message SampleResponse {
-    string response_sample_field = 1;
+message GetAttributesResponse {
+    repeated string attributes = 1;
 }
+
+message LockFlakeRequest {
+    string expression = 1;
+    optional string old_lock_file = 2;
+}
+
+message LockFlakeResponse {
+    string lock_file = 1;
+}
+
