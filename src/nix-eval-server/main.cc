@@ -21,13 +21,13 @@
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <sstream>
+#include <optional>
 #include "nix-eval-server.grpc.pb.h"
 #include <grpc++/grpc++.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
 
-#define REPORT_ERROR(e)                                                       \
-    (std::cerr << "CAUGHT ERROR " << __FILE__ << ":"                          \
-               << __LINE__ << "\n" << nix::filterANSIEscapes(e.what(), true))
+#define REPORT_ERROR(e) \
+    (std::cerr << "CAUGHT ERROR " << __FILE__ << ":" << __LINE__ << "\n" << nix::filterANSIEscapes(e.what(), true))
 
 std::unique_ptr<nix::EvalState> state;
 
@@ -110,13 +110,17 @@ nix::flake::FlakeInputs parseFlakeInputs(nix::EvalState & state, std::string_vie
     return inputs;
 }
 
-std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeExpr, std::string_view path)
+std::optional<std::string> lockFlake(
+    nix::EvalState & state, std::optional<std::string> oldLockFileStr, nix::Expr * flakeExpr, std::string_view path)
 {
     try {
         std::string directoryPath(path.begin(), path.end() - std::string_view{"/flake.nix"}.length());
 
         // auto oldLockFile = nix::flake::LockFile::read(directoryPath + "/flake.lock");
         nix::flake::LockFile oldLockFile;
+        if (oldLockFileStr) {
+            oldLockFile = nix::flake::LockFile{fetchSettings, *oldLockFileStr, directoryPath + "/flake.lock"};
+        }
 
         // std::vector<Diagnostic> diagnostics;
         auto inputs = parseFlakeInputs(state, path, flakeExpr);
@@ -160,82 +164,76 @@ std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeEx
     }
 }
 
-void printValue(
-    std::ostream& stream,
-    nix::EvalState& state,
-    nix::Value* v,
-    int indentation = 0,
-    int maxDepth = 2
-) {
+void printValue(std::ostream & stream, nix::EvalState & state, nix::Value * v, int indentation = 0, int maxDepth = 1)
+{
     try {
         state.forceValue(*v, nix::noPos);
-    } catch (nix::Error& e) {
+    } catch (nix::Error & e) {
         REPORT_ERROR(e);
         stream << "[error]";
         return;
     }
     std::string spaces(indentation, ' ');
     switch (v->type()) {
-        case nix::nAttrs:
-            if (state.isDerivation(*v)) {
-                stream << "<DERIVATION>";
-                break;
-            }
-            if (maxDepth > 0) {
-                stream << "{\n";
-                int n = 0;
-                for (auto& i : *v->attrs()) {
-                    stream << spaces << "  ";
-                    if (n > 20) {
-                        stream << "/* ... */ \n";
-                        break;
-                    }
-                    stream << state.symbols[i.name] << " = ";
-                    printValue(
-                        stream, state, i.value, indentation + 2, maxDepth - 1
-                    );
-                    stream << ";\n";
-                    n++;
+    case nix::nAttrs:
+        if (state.isDerivation(*v)) {
+            stream << "<DERIVATION>";
+            break;
+        }
+        if (maxDepth > 0) {
+            stream << "{\n";
+            int n = 0;
+            for (auto & i : *v->attrs()) {
+                stream << spaces << "  ";
+                if (n > 20) {
+                    stream << "/* ... */ \n";
+                    break;
                 }
-
-                stream << spaces << "}";
-            } else {
-                stream << "{ /* ... */ }";
+                stream << state.symbols[i.name] << " = ";
+                printValue(stream, state, i.value, indentation + 2, maxDepth - 1);
+                stream << ";\n";
+                n++;
             }
-            break;
-        case nix::nList:
-            if (maxDepth > 0) {
-                stream << "[\n";
-                int n = 0;
-                for (auto& i : v->listItems()) {
-                    stream << spaces << "  ";
-                    if (n > 20) {
-                        stream << "/* ... */ \n";
-                        break;
-                    }
-                    printValue(stream, state, i, indentation + 2, maxDepth - 1);
-                    stream << "\n";
-                    n++;
+
+            stream << spaces << "}";
+        } else {
+            stream << "{ /* ... */ }";
+        }
+        break;
+    case nix::nList:
+        if (maxDepth > 0) {
+            stream << "[\n";
+            int n = 0;
+            for (auto & i : v->listItems()) {
+                stream << spaces << "  ";
+                if (n > 20) {
+                    stream << "/* ... */ \n";
+                    break;
                 }
-
-                stream << spaces << "]";
-            } else {
-                stream << "[ /* ... */ ]";
+                printValue(stream, state, i, indentation + 2, maxDepth - 1);
+                stream << "\n";
+                n++;
             }
-            break;
-        default:
-            v->print(state, stream);
-            break;
+
+            stream << spaces << "]";
+        } else {
+            stream << "[ /* ... */ ]";
+        }
+        break;
+    default:
+        v->print(state, stream);
+        break;
     }
 }
 
-std::string documentationPrimop(nix::Value* v) {
+std::string documentationPrimop(nix::Value * v)
+{
     assert(v->isPrimOp());
     std::stringstream ss;
     ss << "### built-in function `" << v->primOp()->name << "`";
     if (!v->primOp()->args.empty()) {
         ss << " *`";
-        for (const auto& arg : v->primOp()->args) {
+        for (const auto & arg : v->primOp()->args) {
             ss << arg << " ";
         }
         ss << "`*";
@@ -259,30 +257,34 @@ std::string documentationPrimop(nix::Value* v) {
     return ss.str();
 }
 
-std::string valueType(nix::Value* v) {
+std::string valueType(nix::Value * v)
+{
+    if (v->isPrimOp()) {
+        return "primop";
+    }
     switch (v->type()) {
-        case nix::nThunk:
-            return "thunk";
-        case nix::nInt:
-            return "integer";
-        case nix::nFloat:
-            return "float";
-        case nix::nBool:
-            return "boolean";
-        case nix::nString:
-            return "string";
-        case nix::nPath:
-            return "path";
-        case nix::nNull:
-            return "null";
-        case nix::nAttrs:
-            return "attrset";
-        case nix::nList:
-            return "list";
-        case nix::nFunction:
-            return "function";
-        case nix::nExternal:
-            return "external";
+    case nix::nThunk:
+        return "thunk";
+    case nix::nInt:
+        return "integer";
+    case nix::nFloat:
+        return "float";
+    case nix::nBool:
+        return "boolean";
+    case nix::nString:
+        return "string";
+    case nix::nPath:
+        return "path";
+    case nix::nNull:
+        return "null";
+    case nix::nAttrs:
+        return "attrset";
+    case nix::nList:
+        return "list";
+    case nix::nFunction:
+        return "function";
+    case nix::nExternal:
+        return "external";
     }
 }
 
@@ -315,9 +317,13 @@ class NixEvalServerImpl final : public NixEvalServer::Service
     Status LockFlake(ServerContext * context, const LockFlakeRequest * request, LockFlakeResponse * response) override
     {
         try {
+            std::optional<std::string> oldLockFile;
+            if (request->has_old_lock_file()) {
+                oldLockFile = std::string{request->old_lock_file()};
+            }
             const auto expression = request->expression();
             auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-            auto lock_file = lockFlake(*state, expr, "/flake.nix");
+            auto lock_file = lockFlake(*state, oldLockFile, expr, "/flake.nix");
             if (lock_file) {
                 response->set_lock_file(*lock_file);
                 return Status::OK;
@@ -328,12 +334,39 @@ class NixEvalServerImpl final : public NixEvalServer::Service
         }
     }
 
-    Status Hover(ServerContext * context, const HoverRequest * request, HoverResponse * response) override {
+    Status Hover(ServerContext * context, const HoverRequest * request, HoverResponse * response) override
+    {
         try {
             const auto expression = request->expression();
             auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-            auto value = evaluate(expr, state->baseEnv);
+            nix::Value * value = evaluate(expr, state->baseEnv);
             response->set_type(valueType(value));
+
+            if (request->has_attr()) {
+                state->forceAttrs(*value, nix::noPos, "");
+                bool found = false;
+                for (auto attr : *value->attrs()) {
+                    if (state->symbols[attr.name] == request->attr()) {
+                        auto pos = state->positions[attr.pos];
+                        std::string path;
+                        if (std::get_if<nix::Pos::String>(&pos.origin)) {
+                            path = "<<string>>";
+                        } else if (auto * sourcePath = std::get_if<nix::SourcePath>(&pos.origin)) {
+                            path = sourcePath->to_string();
+                        }
+                        response->set_path(path);
+                        response->set_row(pos.line);
+                        response->set_col(pos.column);
+                        value = attr.value;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return {StatusCode::INTERNAL, "attrset does not contain specified attr"};
+                }
+            }
+
             if (value->isPrimOp()) {
                 response->set_value(documentationPrimop(value));
             } else {

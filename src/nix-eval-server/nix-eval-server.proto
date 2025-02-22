@@ -27,6 +27,7 @@ message LockFlakeResponse {
 
 message HoverRequest {
     string expression = 1;
+    optional string attr = 2;
 }
 
 message HoverResponse {
