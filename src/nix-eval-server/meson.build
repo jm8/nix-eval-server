@@ -18,6 +18,8 @@ add_project_arguments(
   '-include', 'config-store.hh',
   '-include', 'config-expr.hh',
   '-include', 'config-main.hh',
+  # '-include', 'config-fetchers.hh',
+  '-include', 'config-global.hh',
   language : 'cpp',
 )
 

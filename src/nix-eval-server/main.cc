@@ -14,14 +14,20 @@
 #include "shared.hh"
 #include "source-path.hh"
 #include "store-api.hh"
+#include "terminal.hh"
 #include "value.hh"
 #include <memory>
 #include <nix-eval-server.pb.h>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
+#include <sstream>
 #include "nix-eval-server.grpc.pb.h"
 #include <grpc++/grpc++.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
+
+#define REPORT_ERROR(e)                                                       \
+    (std::cerr << "CAUGHT ERROR " << __FILE__ << ":"                          \
+               << __LINE__ << "\n" << nix::filterANSIEscapes(e.what(), true))
 
 std::unique_ptr<nix::EvalState> state;
 
@@ -40,7 +46,7 @@ std::vector<std::string> get_attributes(const std::string & expression)
         state->eval(expr, v);
         state->forceAttrs(v, nix::noPos, "");
     } catch (nix::Error & e) {
-        std::cerr << "CAUGHT ERROR: " << e.what() << "\n";
+        REPORT_ERROR(e);
         return {};
     }
     std::vector<std::string> result;
@@ -55,6 +61,7 @@ nix::Value * evaluate(nix::Expr * e, nix::Env & env)
 {
     auto v = state->allocValue();
     e->eval(*state, env, *v);
+    state->forceValue(*v, nix::noPos);
     return v;
 }
 
@@ -95,8 +102,7 @@ nix::flake::FlakeInputs parseFlakeInputs(nix::EvalState & state, std::string_vie
                         state, state.symbols[inputName], inputValue, nix::noPos, {}, {"root"});
                     inputs.emplace(state.symbols[inputName], flakeInput);
                 } catch (nix::Error & err) {
-                    //     diagnostics.push_back(
-                    //         {nix::filterANSIEscapes(err.msg(), true), Location{state, inputAttr.e}.range});
+                    REPORT_ERROR(err);
                 }
             }
         }
@@ -149,9 +155,134 @@ std::optional<std::string> lockFlake(nix::EvalState & state, nix::Expr * flakeEx
 
         return lockFileStr;
     } catch (nix::Error & err) {
-        std::cerr << "CAUGHT ERROR" << err.what() << "\n";
-        // REPORT_ERROR(err);
+        REPORT_ERROR(err);
         return {};
+    }
+}
+
+void printValue(
+    std::ostream& stream,
+    nix::EvalState& state,
+    nix::Value* v,
+    int indentation = 0,
+    int maxDepth = 2
+) {
+    try {
+        state.forceValue(*v, nix::noPos);
+    } catch (nix::Error& e) {
+        REPORT_ERROR(e);
+        stream << "[error]";
+        return;
+    }
+    std::string spaces(indentation, ' ');
+    switch (v->type()) {
+        case nix::nAttrs:
+            if (state.isDerivation(*v)) {
+                stream << "<DERIVATION>";
+                break;
+            }
+            if (maxDepth > 0) {
+                stream << "{\n";
+                int n = 0;
+                for (auto& i : *v->attrs()) {
+                    stream << spaces << "  ";
+                    if (n > 20) {
+                        stream << "/* ... */ \n";
+                        break;
+                    }
+                    stream << state.symbols[i.name] << " = ";
+                    printValue(
+                        stream, state, i.value, indentation + 2, maxDepth - 1
+                    );
+                    stream << ";\n";
+                    n++;
+                }
+
+                stream << spaces << "}";
+            } else {
+                stream << "{ /* ... */ }";
+            }
+            break;
+        case nix::nList:
+            if (maxDepth > 0) {
+                stream << "[\n";
+                int n = 0;
+                for (auto& i : v->listItems()) {
+                    stream << spaces << "  ";
+                    if (n > 20) {
+                        stream << "/* ... */ \n";
+                        break;
+                    }
+                    printValue(stream, state, i, indentation + 2, maxDepth - 1);
+                    stream << "\n";
+                    n++;
+                }
+
+                stream << spaces << "]";
+            } else {
+                stream << "[ /* ... */ ]";
+            }
+            break;
+        default:
+            v->print(state, stream);
+            break;
+    }
+}
+
+std::string documentationPrimop(nix::Value* v) {
+    assert(v->isPrimOp());
+    std::stringstream ss;
+    ss << "### built-in function `" << v->primOp()->name << "`";
+    if (!v->primOp()->args.empty()) {
+        ss << " *`";
+        for (const auto& arg : v->primOp()->args) {
+            ss << arg << " ";
+        }
+        ss << "`*";
+    }
+    ss << "\n\n";
+    if (v->primOp()->doc) {
+        std::string_view doc{v->primOp()->doc};
+        int spacesToRemoveAtStartOfLine = 6;
+        for (char c : doc) {
+            if (c == '\n') {
+                ss << '\n';
+                spacesToRemoveAtStartOfLine = 6;
+            } else if (spacesToRemoveAtStartOfLine > 0 && c == ' ') {
+                spacesToRemoveAtStartOfLine--;
+            } else {
+                ss << c;
+                spacesToRemoveAtStartOfLine = -1;
+            }
+        }
+    }
+    return ss.str();
+}
+
+std::string valueType(nix::Value* v) {
+    switch (v->type()) {
+        case nix::nThunk:
+            return "thunk";
+        case nix::nInt:
+            return "integer";
+        case nix::nFloat:
+            return "float";
+        case nix::nBool:
+            return "boolean";
+        case nix::nString:
+            return "string";
+        case nix::nPath:
+            return "path";
+        case nix::nNull:
+            return "null";
+        case nix::nAttrs:
+            return "attrset";
+        case nix::nList:
+            return "list";
+        case nix::nFunction:
+            return "function";
+        case nix::nExternal:
+            return "external";
     }
 }
 
@@ -160,32 +291,61 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
 using grpc::StatusCode;
-using nix_eval_server::NixEvalServer;
 using nix_eval_server::GetAttributesRequest;
 using nix_eval_server::GetAttributesResponse;
+using nix_eval_server::HoverRequest;
+using nix_eval_server::HoverResponse;
 using nix_eval_server::LockFlakeRequest;
 using nix_eval_server::LockFlakeResponse;
+using nix_eval_server::NixEvalServer;
 
 class NixEvalServerImpl final : public NixEvalServer::Service
 {
-    Status GetAttributes(ServerContext *context, const GetAttributesRequest *request, GetAttributesResponse *response) override {
+    Status GetAttributes(
+        ServerContext * context, const GetAttributesRequest * request, GetAttributesResponse * response) override
+    {
         const auto expression = request->expression();
         const auto attributes = get_attributes(expression);
-        for (const auto &attribute : attributes) {
+        for (const auto & attribute : attributes) {
             response->add_attributes(attribute);
         }
         return Status::OK;
     }
 
-    Status LockFlake(ServerContext *context, const LockFlakeRequest *request, LockFlakeResponse *response) override {
-        const auto expression = request->expression();
-        auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-        auto lock_file = lockFlake(*state, expr, "/flake.nix");
-        if (lock_file) {
-            response->set_lock_file(*lock_file);
-            return Status::OK;
+    Status LockFlake(ServerContext * context, const LockFlakeRequest * request, LockFlakeResponse * response) override
+    {
+        try {
+            const auto expression = request->expression();
+            auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+            auto lock_file = lockFlake(*state, expr, "/flake.nix");
+            if (lock_file) {
+                response->set_lock_file(*lock_file);
+                return Status::OK;
+            }
+        } catch (std::exception & ex) {
+            REPORT_ERROR(ex);
+            return {StatusCode::INTERNAL, "Failed"};
         }
-        return {StatusCode::INTERNAL, "Failed"};
+    }
+
+    Status Hover(ServerContext * context, const HoverRequest * request, HoverResponse * response) override {
+        try {
+            const auto expression = request->expression();
+            auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+            auto value = evaluate(expr, state->baseEnv);
+            response->set_type(valueType(value));
+            if (value->isPrimOp()) {
+                response->set_value(documentationPrimop(value));
+            } else {
+                std::stringstream ss;
+                printValue(ss, *state, value);
+                response->set_value(ss.str());
+            }
+        } catch (std::exception & ex) {
+            REPORT_ERROR(ex);
+            return {StatusCode::INTERNAL, "Failed"};
+        }
+        return Status::OK;
     }
 };
 

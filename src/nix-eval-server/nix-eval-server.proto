@@ -5,6 +5,7 @@ package nix_eval_server;
 service NixEvalServer {
     rpc GetAttributes (GetAttributesRequest) returns (GetAttributesResponse) {}
     rpc LockFlake (LockFlakeRequest) returns (LockFlakeResponse) {}
+    rpc Hover (HoverRequest) returns (HoverResponse) {}
 }
 
 message GetAttributesRequest {
@@ -22,5 +23,17 @@ message LockFlakeRequest {
 
 message LockFlakeResponse {
     string lock_file = 1;
+}
+
+message HoverRequest {
+    string expression = 1;
+}
+
+message HoverResponse {
+    string value = 1;
+    string type = 2;
+    string path = 3;
+    int32 row = 4;
+    int32 col = 5;
 }
 
