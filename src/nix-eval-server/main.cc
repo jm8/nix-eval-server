@@ -25,6 +25,7 @@
 #include "nix-eval-server.grpc.pb.h"
 #include <grpc++/grpc++.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <thread>
 
 #define REPORT_ERROR(e) \
     (std::cerr << "CAUGHT ERROR " << __FILE__ << ":" << __LINE__ << "\n" << nix::filterANSIEscapes(e.what(), true))
@@ -382,8 +383,23 @@ class NixEvalServerImpl final : public NixEvalServer::Service
     }
 };
 
+void monitor_parent() {
+    pid_t original_ppid = getppid();
+
+    while (1) {
+        pid_t current_ppid = getppid();
+        if (current_ppid != original_ppid) {
+            std::cout << "Parent process changed, exiting" << std::endl;
+            exit(1);  // Exit immediately
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 int main(int argc, char ** argv)
 {
+    std::thread monitor_thread(monitor_parent);
+    monitor_thread.detach();
+    
     nix::initGC();
     nix::initNix();
 
