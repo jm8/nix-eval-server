@@ -6,6 +6,7 @@ service NixEvalServer {
     rpc GetAttributes (GetAttributesRequest) returns (GetAttributesResponse) {}
     rpc LockFlake (LockFlakeRequest) returns (LockFlakeResponse) {}
     rpc Hover (HoverRequest) returns (HoverResponse) {}
+    rpc AddVariable (AddVariableRequest) returns (AddVariableResponse) {}
 }
 
 message GetAttributesRequest {
@@ -36,5 +37,14 @@ message HoverResponse {
     string path = 3;
     int32 row = 4;
     int32 col = 5;
+}
+
+message AddVariableRequest {
+    string name = 1;
+    string expression = 2;
+}
+
+message AddVariableResponse {
+
 }
 

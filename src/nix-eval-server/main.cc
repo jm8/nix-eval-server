@@ -10,6 +10,7 @@
 #include "flake/lockfile.hh"
 #include "flake/settings.hh"
 #include "grpcpp/server_context.h"
+#include "nixexpr.hh"
 #include "pos-idx.hh"
 #include "shared.hh"
 #include "source-path.hh"
@@ -25,12 +26,18 @@
 #include "nix-eval-server.grpc.pb.h"
 #include <grpc++/grpc++.h>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <string_view>
 #include <thread>
 
 #define REPORT_ERROR(e) \
     (std::cerr << "CAUGHT ERROR " << __FILE__ << ":" << __LINE__ << "\n" << nix::filterANSIEscapes(e.what(), true))
 
+const static int envSize = 32768;
+
 std::unique_ptr<nix::EvalState> state;
+std::shared_ptr<nix::StaticEnv> baseStaticEnv;
+nix::Env * baseEnv;
+nix::Displacement displ = 0;
 
 nix::fetchers::Settings fetchSettings;
 
@@ -39,36 +46,48 @@ nix::EvalSettings evalSettings{
     {},
 };
 
+nix::Value * evaluate(nix::Expr * e, nix::Env * env)
+{
+    auto v = state->allocValue();
+    e->eval(*state, *env, *v);
+    state->forceValue(*v, nix::noPos);
+    return v;
+}
+
+nix::Expr * parse(std::string_view s)
+{
+    return state->parseExprFromString(std::string{s}, nix::SourcePath(state->rootFS), baseStaticEnv);
+}
+
+void add_variable(std::string_view name, nix::Value *v) {
+    auto symbol = state->symbols.create(name);
+    baseStaticEnv->vars.emplace_back(symbol, displ);
+    baseStaticEnv->sort();
+    baseEnv->values[displ++] = v;
+}
+
 std::vector<std::string> get_attributes(const std::string & expression)
 {
-    nix::Value v;
+    nix::Value *v;
     try {
-        auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-        state->eval(expr, v);
-        state->forceAttrs(v, nix::noPos, "");
+        auto expr = parse(expression);
+        v = evaluate(expr, baseEnv);
+        state->forceAttrs(*v, nix::noPos, "");
     } catch (nix::Error & e) {
         REPORT_ERROR(e);
         return {};
     }
     std::vector<std::string> result;
-    for (auto attr : *v.attrs()) {
+    for (auto attr : *v->attrs()) {
         result.push_back(state->symbols[attr.name].c_str());
     }
     std::sort(result.begin(), result.end());
     return result;
 }
 
-nix::Value * evaluate(nix::Expr * e, nix::Env & env)
-{
-    auto v = state->allocValue();
-    e->eval(*state, env, *v);
-    state->forceValue(*v, nix::noPos);
-    return v;
-}
-
 nix::flake::FlakeInputs parseFlakeInputs(nix::EvalState & state, std::string_view path, nix::Expr * flakeExpr)
 {
-    auto & env = state.baseEnv;
+    auto env = baseEnv;
 
     auto flakeAttrs = dynamic_cast<nix::ExprAttrs *>(flakeExpr);
 
@@ -92,8 +111,8 @@ nix::flake::FlakeInputs parseFlakeInputs(nix::EvalState & state, std::string_vie
                 // diagnostics.push_back({"expected an attribute set", Location{state, attr.e}.range});
                 continue;
             }
-            auto subEnv = state.allocEnv(0);
-            subEnv.up = &env;
+            auto subEnv = &state.allocEnv(0);
+            subEnv->up = env;
             // auto subEnv = updateEnv(state, flakeExpr, inputsAttrs, &env, {});
 
             for (auto [inputName, inputAttr] : inputsAttrs->attrs) {
@@ -300,6 +319,8 @@ using nix_eval_server::HoverRequest;
 using nix_eval_server::HoverResponse;
 using nix_eval_server::LockFlakeRequest;
 using nix_eval_server::LockFlakeResponse;
+using nix_eval_server::AddVariableRequest;
+using nix_eval_server::AddVariableResponse;
 using nix_eval_server::NixEvalServer;
 
 class NixEvalServerImpl final : public NixEvalServer::Service
@@ -323,7 +344,7 @@ class NixEvalServerImpl final : public NixEvalServer::Service
                 oldLockFile = std::string{request->old_lock_file()};
             }
             const auto expression = request->expression();
-            auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
+            auto expr = parse(expression);
             auto lock_file = lockFlake(*state, oldLockFile, expr, "/flake.nix");
             if (lock_file) {
                 response->set_lock_file(*lock_file);
@@ -339,8 +360,8 @@ class NixEvalServerImpl final : public NixEvalServer::Service
     {
         try {
             const auto expression = request->expression();
-            auto expr = state->parseExprFromString(expression, nix::SourcePath(state->rootFS));
-            nix::Value * value = evaluate(expr, state->baseEnv);
+            auto expr = parse(expression);
+            nix::Value * value = evaluate(expr, baseEnv);
             response->set_type(valueType(value));
 
             if (request->has_attr()) {
@@ -381,16 +402,32 @@ class NixEvalServerImpl final : public NixEvalServer::Service
         }
         return Status::OK;
     }
+
+    Status AddVariable(ServerContext * context, const AddVariableRequest * request, AddVariableResponse * response) override
+    {
+        try {
+            const auto expression = request->expression();
+            const auto name = request->name();
+            auto expr = parse(expression);
+            nix::Value * value = evaluate(expr, baseEnv);
+            add_variable(name, value);
+        } catch (std::exception & ex) {
+            REPORT_ERROR(ex);
+            return {StatusCode::INTERNAL, "Failed"};
+        }
+        return Status::OK;
+    }
 };
 
-void monitor_parent() {
+void monitor_parent()
+{
     pid_t original_ppid = getppid();
 
     while (1) {
         pid_t current_ppid = getppid();
         if (current_ppid != original_ppid) {
             std::cout << "Parent process changed, exiting" << std::endl;
-            exit(1);  // Exit immediately
+            exit(1); // Exit immediately
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -399,11 +436,16 @@ int main(int argc, char ** argv)
 {
     std::thread monitor_thread(monitor_parent);
     monitor_thread.detach();
-    
+
     nix::initGC();
     nix::initNix();
 
     state = std::make_unique<nix::EvalState>(nix::LookupPath::parse({}), nix::openStore(), fetchSettings, evalSettings);
+    baseStaticEnv = std::make_shared<nix::StaticEnv>(nullptr, state->staticBaseEnv.get());
+    baseEnv = &state->allocEnv(envSize);
+    baseEnv->up = &state->baseEnv;
+
+    add_variable("__nix_analyzer_test", evaluate(parse(R"({test1234 = 1; test5678 = 2;} )"), baseEnv));
 
     grpc::EnableDefaultHealthCheckService(true);
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
