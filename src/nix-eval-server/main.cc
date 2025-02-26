@@ -1,4 +1,5 @@
 #include "canon-path.hh"
+#include "config-global.hh"
 #include "eval-gc.hh"
 #include "eval-settings.hh"
 #include "eval.hh"
@@ -15,6 +16,7 @@
 #include "shared.hh"
 #include "source-path.hh"
 #include "store-api.hh"
+#include "terminal.hh"
 #include "value.hh"
 #include <cstdio>
 #include <grpc++/grpc++.h>
@@ -365,8 +367,6 @@ class NixEvalServerImpl final : public NixEvalServer::Service
             const auto expression = request->expression();
             auto expr = parse(expression);
             nix::Value * value = evaluate(expr, baseEnv);
-            response->set_type(valueType(value));
-
             if (request->has_attr()) {
                 state->forceAttrs(*value, nix::noPos, "");
                 bool found = false;
@@ -392,6 +392,7 @@ class NixEvalServerImpl final : public NixEvalServer::Service
                 }
             }
 
+            response->set_type(valueType(value));
             if (value->isPrimOp()) {
                 response->set_value(documentationPrimop(value));
             } else {
