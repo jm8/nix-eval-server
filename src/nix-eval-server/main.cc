@@ -392,7 +392,6 @@ class NixEvalServerImpl final : public NixEvalServer::Service
                 }
             }
 
-            response->set_type(valueType(value));
             if (value->isPrimOp()) {
                 response->set_value(documentationPrimop(value));
             } else {
@@ -400,6 +399,7 @@ class NixEvalServerImpl final : public NixEvalServer::Service
                 printValue(ss, *state, value);
                 response->set_value(ss.str());
             }
+            response->set_type(valueType(value));
         } catch (std::exception & ex) {
             REPORT_ERROR(ex);
             return {StatusCode::INTERNAL, "Failed"};
