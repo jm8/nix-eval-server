@@ -399,6 +399,19 @@ class NixEvalServerImpl final : public NixEvalServer::Service
                 printValue(ss, *state, value);
                 response->set_value(ss.str());
             }
+            // if (value->isLambda()) {
+            //     nix::ExprLambda * lambda = value->payload.lambda.fun;
+            //     auto pos = state->positions[lambda->pos];
+            //     std::string path;
+            //     if (std::get_if<nix::Pos::String>(&pos.origin)) {
+            //         path = "<<string>>";
+            //     } else if (auto * sourcePath = std::get_if<nix::SourcePath>(&pos.origin)) {
+            //         path = sourcePath->to_string();
+            //     }
+            //     response->set_path(path);
+            //     response->set_row(pos.line);
+            //     response->set_col(pos.column);
+            // }
             response->set_type(valueType(value));
         } catch (std::exception & ex) {
             REPORT_ERROR(ex);
