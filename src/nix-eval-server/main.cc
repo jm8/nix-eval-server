@@ -1,10 +1,6 @@
-#include <cstdio>
-#include <grpcpp/support/status.h>
-#include <iostream>
-#include <nlohmann/json.hpp>
 #include "canon-path.hh"
-#include "config-global.hh"
 #include "eval-gc.hh"
+#include "eval-settings.hh"
 #include "eval.hh"
 #include "fetch-settings.hh"
 #include "flake/flake.hh"
@@ -12,25 +8,27 @@
 #include "flake/settings.hh"
 #include "globals.hh"
 #include "grpcpp/server_context.h"
+#include "nix-eval-server.grpc.pb.h"
 #include "nixexpr.hh"
 #include "pos-idx.hh"
 #include "search-path.hh"
 #include "shared.hh"
 #include "source-path.hh"
 #include "store-api.hh"
-#include "terminal.hh"
-#include "eval-settings.hh"
 #include "value.hh"
+#include <cstdio>
+#include <grpc++/grpc++.h>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <grpcpp/support/status.h>
+#include <iostream>
 #include <memory>
 #include <nix-eval-server.pb.h>
 #include <nlohmann/json_fwd.hpp>
-#include <string>
-#include <sstream>
+#include <nlohmann/json.hpp>
 #include <optional>
-#include "nix-eval-server.grpc.pb.h"
-#include <grpc++/grpc++.h>
-#include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <sstream>
 #include <string_view>
+#include <string>
 #include <thread>
 
 #define REPORT_ERROR(e) \
