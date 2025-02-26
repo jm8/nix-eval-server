@@ -3,19 +3,23 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include "canon-path.hh"
+#include "config-global.hh"
 #include "eval-gc.hh"
 #include "eval.hh"
 #include "fetch-settings.hh"
 #include "flake/flake.hh"
 #include "flake/lockfile.hh"
 #include "flake/settings.hh"
+#include "globals.hh"
 #include "grpcpp/server_context.h"
 #include "nixexpr.hh"
 #include "pos-idx.hh"
+#include "search-path.hh"
 #include "shared.hh"
 #include "source-path.hh"
 #include "store-api.hh"
 #include "terminal.hh"
+#include "eval-settings.hh"
 #include "value.hh"
 #include <memory>
 #include <nix-eval-server.pb.h>
@@ -59,7 +63,8 @@ nix::Expr * parse(std::string_view s)
     return state->parseExprFromString(std::string{s}, nix::SourcePath(state->rootFS), baseStaticEnv);
 }
 
-void add_variable(std::string_view name, nix::Value *v) {
+void add_variable(std::string_view name, nix::Value * v)
+{
     auto symbol = state->symbols.create(name);
     baseStaticEnv->vars.emplace_back(symbol, displ);
     baseStaticEnv->sort();
@@ -68,7 +73,7 @@ void add_variable(std::string_view name, nix::Value *v) {
 
 std::vector<std::string> get_attributes(const std::string & expression)
 {
-    nix::Value *v;
+    nix::Value * v;
     try {
         auto expr = parse(expression);
         v = evaluate(expr, baseEnv);
@@ -313,14 +318,14 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
 using grpc::StatusCode;
+using nix_eval_server::AddVariableRequest;
+using nix_eval_server::AddVariableResponse;
 using nix_eval_server::GetAttributesRequest;
 using nix_eval_server::GetAttributesResponse;
 using nix_eval_server::HoverRequest;
 using nix_eval_server::HoverResponse;
 using nix_eval_server::LockFlakeRequest;
 using nix_eval_server::LockFlakeResponse;
-using nix_eval_server::AddVariableRequest;
-using nix_eval_server::AddVariableResponse;
 using nix_eval_server::NixEvalServer;
 
 class NixEvalServerImpl final : public NixEvalServer::Service
@@ -403,7 +408,8 @@ class NixEvalServerImpl final : public NixEvalServer::Service
         return Status::OK;
     }
 
-    Status AddVariable(ServerContext * context, const AddVariableRequest * request, AddVariableResponse * response) override
+    Status
+    AddVariable(ServerContext * context, const AddVariableRequest * request, AddVariableResponse * response) override
     {
         try {
             const auto expression = request->expression();
@@ -427,7 +433,7 @@ void monitor_parent()
         pid_t current_ppid = getppid();
         if (current_ppid != original_ppid) {
             std::cout << "Parent process changed, exiting" << std::endl;
-            exit(1); // Exit immediately
+            exit(1);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -440,12 +446,15 @@ int main(int argc, char ** argv)
     nix::initGC();
     nix::initNix();
 
-    state = std::make_unique<nix::EvalState>(nix::LookupPath::parse({}), nix::openStore(), fetchSettings, evalSettings);
+    nix::LookupPath lookupPath;
+    if (auto nixPathEnv = nix::getEnv("NIX_PATH")) {
+        lookupPath = nix::LookupPath::parse(nix::EvalSettings::parseNixPath(nixPathEnv.value()));
+    }
+
+    state = std::make_unique<nix::EvalState>(lookupPath, nix::openStore(), fetchSettings, evalSettings);
     baseStaticEnv = std::make_shared<nix::StaticEnv>(nullptr, state->staticBaseEnv.get());
     baseEnv = &state->allocEnv(envSize);
     baseEnv->up = &state->baseEnv;
-
-    add_variable("__nix_analyzer_test", evaluate(parse(R"({test1234 = 1; test5678 = 2;} )"), baseEnv));
 
     grpc::EnableDefaultHealthCheckService(true);
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
